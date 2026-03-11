@@ -1,0 +1,26 @@
+# ── Secrets — NEVER commit these ─────────────────────────────────
+.env
+*.env.local
+# application.properties contains real DB credentials — never commit it
+**/application.properties
+
+# ── Java build output ─────────────────────────────────────────────
+java-backend/target/
+*.jar
+*.class
+
+# ── Node / frontend ───────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ── IDE ───────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
