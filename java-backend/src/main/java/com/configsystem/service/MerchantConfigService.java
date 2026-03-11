@@ -58,6 +58,54 @@ public class MerchantConfigService {
                 "OK — extracted from " + merchants.size() + " merchants");
     }
 
+    // ── Fetch ──────────────────────────────────────────────────────────────
+    @Transactional("mysqlTransactionManager")
+    public Api.FetchResult fetch(Api.FetchRequest req) {
+        log.info("Fetching config for merchant: {} with {} paths", req.merchantId(), req.paths().size());
+        
+        try {
+            // 1. Fetch Merchant
+            Merchant merchant = merchantRepo.findById(req.merchantId())
+                    .orElseThrow(() -> new GlobalExceptionHandler.MerchantNotFoundException(req.merchantId()));
+
+            String configJson = merchant.getConfigJson();
+            JsonNode root;
+            if (configJson == null || configJson.isBlank()) {
+                root = objectMapper.createObjectNode();
+            } else {
+                root = objectMapper.readTree(configJson);
+            }
+
+            Map<String, Object> values = new LinkedHashMap<>();
+
+            // 2. Fetch each path
+            for (String path : req.paths()) {
+                String pointerStr = "/" + path.replace("[", "/").replace("]", "").replace(".", "/").replaceAll("/+", "/");
+                JsonNode valNode = root.at(pointerStr);
+                
+                if (valNode.isMissingNode() || valNode.isNull()) {
+                    values.put(path, null);
+                } else if (valNode.isBoolean()) {
+                    values.put(path, valNode.asBoolean());
+                } else if (valNode.isNumber()) {
+                    values.put(path, valNode.numberValue());
+                } else if (valNode.isTextual()) {
+                    values.put(path, valNode.asText());
+                } else {
+                    values.put(path, objectMapper.treeToValue(valNode, Object.class));
+                }
+            }
+
+            return Api.FetchResult.success("Configuration fetched successfully.", values);
+        } catch (GlobalExceptionHandler.MerchantNotFoundException e) {
+             log.warn("Fetch failed: {}", e.getMessage());
+             return Api.FetchResult.failure(e.getMessage());
+        } catch (Exception e) {
+            log.error("Fetch failed", e);
+            return Api.FetchResult.failure("Fetch failed: " + e.getMessage());
+        }
+    }
+
     // ── Update ─────────────────────────────────────────────────────────────
     @Transactional("mysqlTransactionManager")
     public Api.UpdateResult update(Api.UpdateRequest req) {

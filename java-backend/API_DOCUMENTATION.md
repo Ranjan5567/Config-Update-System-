@@ -14,31 +14,10 @@
    - [POST /merchants/metadata/seed-all](#1-seed-metadata)
    - [GET /metadata](#2-get-metadata)
    - [POST /config/update](#3-update-config)
+   - [POST /config/fetch](#4-fetch-config)
 4. [Error Handling](#error-handling)
 5. [Execution Flow Diagrams](#execution-flow-diagrams)
 
----
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        ConfigSync Backend                           │
-│                                                                     │
-│  ┌──────────────┐    ┌────────────────────────┐    ┌─────────────┐ │
-│  │  Controller   │───▶│  MerchantConfigService  │───▶│ JsonPathUtil│ │
-│  │  (REST API)   │    │  (Business Logic)       │    │ (JSON Walk) │ │
-│  └──────────────┘    └────────────────────────┘    └─────────────┘ │
-│         │                    │           │                          │
-│         │                    ▼           ▼                          │
-│         │            ┌───────────┐ ┌──────────────┐                │
-│         │            │ MySQL DB  │ │ PostgreSQL DB│                │
-│         │            │ merchants │ │ json_metadata│                │
-│         │            └───────────┘ └──────────────┘                │
-│         │                                                          │
-│         └── GlobalExceptionHandler (RFC 7807 ProblemDetail)        │
-└─────────────────────────────────────────────────────────────────────┘
-```
 
 The system uses **two databases**:
 
@@ -359,6 +338,116 @@ MerchantConfigService.update()          @Transactional("mysqlTransactionManager"
 
 ---
 
+### 4. Fetch Config
+
+Fetches the **current values** of one or more JSON paths from a specific merchant's `config_json`. This is useful for reading config values before applying updates (e.g., to display current state in a review/approval stage).
+
+```
+POST /api/config/fetch
+```
+
+#### Request
+
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+
+```json
+{
+  "merchantId": 1001,
+  "paths": [
+    "payment_config.interest_rate",
+    "display_config.theme",
+    "display_config.show_offers"
+  ]
+}
+```
+
+| Field        | Type           | Required | Description                                     |
+|--------------|----------------|----------|-------------------------------------------------|
+| `merchantId` | Long           | ✅ Yes   | ID of the merchant to fetch config from         |
+| `paths`      | List\<String\> | ✅ Yes   | List of dot-notation JSON paths to retrieve     |
+
+#### Response — `200 OK` (Success)
+
+```json
+{
+  "success": true,
+  "message": "Configuration fetched successfully.",
+  "values": {
+    "payment_config.interest_rate": 14.5,
+    "display_config.theme": "light",
+    "display_config.show_offers": false
+  },
+  "timestamp": "2026-03-11T19:30:00"
+}
+```
+
+#### Response — `200 OK` (Failure — merchant not found)
+
+```json
+{
+  "success": false,
+  "message": "Merchant 9999 not found.",
+  "values": null,
+  "timestamp": "2026-03-11T19:30:00"
+}
+```
+
+> **Note:** If a requested path does not exist in the merchant's JSON, its value will be `null` in the response (the request will still succeed).
+
+| Field       | Type                | Description                                         |
+|-------------|---------------------|-----------------------------------------------------|
+| `success`   | Boolean             | `true` if fetch succeeded                           |
+| `message`   | String              | Human-readable result or error reason               |
+| `values`    | Map\<String, Object\> | Requested paths mapped to their current values    |
+| `timestamp` | LocalDateTime       | Server timestamp of the operation                   |
+
+#### Execution Flow
+
+```
+Client
+  │
+  ▼
+POST /config/fetch  { merchantId: 1001, paths: [ ... ] }
+  │
+  ▼
+MerchantConfigController.fetch()
+  │  @Valid validates: merchantId != null, paths != null
+  │
+  ▼
+MerchantConfigService.fetch()          @Transactional("mysqlTransactionManager")
+  │
+  ├─── 1. FETCH MERCHANT
+  │         merchantRepo.findById(merchantId)    ──▶ MySQL: SELECT * FROM merchants
+  │                                                        WHERE merchant_id = ?
+  │         │
+  │         └── Not found? → Return failure("Merchant X not found.")
+  │
+  ├─── 2. PARSE CONFIG JSON
+  │         objectMapper.readTree(merchant.getConfigJson())
+  │         │
+  │         └── JSON is null/blank? → Start with empty ObjectNode {}
+  │
+  ├─── 3. RESOLVE EACH PATH
+  │         For each path in paths:
+  │             Convert dot-notation to JSON Pointer (e.g. "payment_config.interest_rate"
+  │                                                     → "/payment_config/interest_rate")
+  │             root.at(pointer)
+  │             │
+  │             ├── Missing/null → values.put(path, null)
+  │             ├── Boolean     → values.put(path, booleanValue)
+  │             ├── Number      → values.put(path, numberValue)
+  │             ├── String      → values.put(path, textValue)
+  │             └── Object/Array→ values.put(path, deserializedObject)
+  │
+  └─── 4. Return FetchResult { success: true, message, values, timestamp }
+              │
+              ▼
+         HTTP 200 OK (JSON response)
+```
+
+---
+
 ## Error Handling
 
 All errors follow the **RFC 7807 ProblemDetail** format (provided by Spring's built-in `ProblemDetail` class).
@@ -454,16 +543,16 @@ Triggered for any unhandled exception.
                     │    can be validated.                │
                     └──────────────┬───────────────────┘
                                    │
-          ┌────────────────────────┼─────────────────────────┐
-          │                        │                         │
-┌─────────▼──────────┐  ┌─────────▼──────────┐   ┌──────────▼─────────┐
-│   GET /metadata     │  │   GET /metadata     │   │  POST /config/     │
-│                     │  │                     │   │       update       │
-│   Browse available  │  │   (MCP Server uses  │   │                    │
-│   paths & types     │  │    this to provide  │   │  Send updates as   │
-│   for reference     │  │    context to LLMs) │   │  path → value map  │
-│                     │  │                     │   │                    │
-└─────────────────────┘  └─────────────────────┘   └────────────────────┘
+          ┌──────────────┬─────────┼─────────┬──────────────┐
+          │              │         │         │              │
+┌─────────▼────────┐ ┌───▼─────────▼───┐ ┌───▼──────────┐ ┌▼─────────────────┐
+│  GET /metadata   │ │  GET /metadata  │ │ POST /config/│ │ POST /config/    │
+│                  │ │                 │ │      update  │ │      fetch       │
+│  Browse paths    │ │  (MCP Server    │ │              │ │                  │
+│  & types for     │ │   uses this to  │ │  Send updates│ │  Fetch current   │
+│  reference       │ │   provide LLM   │ │  as path →   │ │  values for      │
+│                  │ │   context)      │ │  value map   │ │  given paths     │
+└──────────────────┘ └─────────────────┘ └──────────────┘ └──────────────────┘
 ```
 
 ### Data Flow Across Databases
@@ -513,6 +602,14 @@ Triggered for any unhandled exception.
 │  │  If anything fails → MySQL changes roll back            │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                                                                 │
+│  fetch()    → @Transactional("mysqlTransactionManager")         │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  READ from MySQL (read-only, transactional)             │    │
+│  │  Parse JSON and resolve each requested path             │    │
+│  │                                                         │    │
+│  │  No writes — safe, idempotent operation                 │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -520,8 +617,9 @@ Triggered for any unhandled exception.
 
 ## Quick Reference
 
-| Method | Endpoint                          | Database      | Description                           |
-|--------|-----------------------------------|---------------|---------------------------------------|
-| POST   | `/api/merchants/metadata/seed-all` | MySQL → Postgres | Scan merchants, populate metadata    |
-| GET    | `/api/metadata`                    | Postgres         | List all known JSON paths + types    |
-| POST   | `/api/config/update`               | Postgres + MySQL | Validate paths, then update config   |
+| Method | Endpoint                          | Database         | Description                           |
+|--------|-----------------------------------|------------------|---------------------------------------|
+| POST   | `/api/merchants/metadata/seed-all` | MySQL → Postgres | Scan merchants, populate metadata     |
+| GET    | `/api/metadata`                    | Postgres         | List all known JSON paths + types     |
+| POST   | `/api/config/update`               | Postgres + MySQL | Validate paths, then update config    |
+| POST   | `/api/config/fetch`                | MySQL            | Fetch current values for given paths  |

@@ -18,6 +18,11 @@ public final class Api {
             @NotNull java.util.Map<String, Object> updates
     ) {}
 
+    public record FetchRequest(
+            @NotNull Long merchantId,
+            @NotNull List<String> paths
+    ) {}
+
     // ── Responses ─────────────────────────────────────────────────────────────
 
     public record UpdateResult(
@@ -31,6 +36,20 @@ public final class Api {
         }
         public static UpdateResult failure(String reason) {
             return new UpdateResult(false, reason, null, java.time.LocalDateTime.now());
+        }
+    }
+
+    public record FetchResult(
+            boolean      success,
+            String       message,
+            java.util.Map<String, Object> values,
+            java.time.LocalDateTime timestamp
+    ) {
+        public static FetchResult success(String message, java.util.Map<String, Object> values) {
+            return new FetchResult(true, message, values, java.time.LocalDateTime.now());
+        }
+        public static FetchResult failure(String reason) {
+            return new FetchResult(false, reason, null, java.time.LocalDateTime.now());
         }
     }
 

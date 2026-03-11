@@ -50,4 +50,12 @@ public class MerchantConfigController {
             @Valid @RequestBody Api.UpdateRequest req) {
         return ResponseEntity.ok(service.update(req));
     }
+    /**
+     * Receives a list of paths and returns their values.
+     */
+    @PostMapping("/config/fetch")
+    public ResponseEntity<Api.FetchResult> fetch(
+            @Valid @RequestBody Api.FetchRequest req) {
+        return ResponseEntity.ok(service.fetch(req));
+    }
 }
