@@ -81,12 +81,7 @@ public class MerchantConfigService {
                     String name = "Unknown";
                     try {
                         JsonNode root = objectMapper.readTree(m.getConfigJson());
-                        // Try typical keys for merchant name
-                        if (root.has("business_name")) {
-                            name = root.get("business_name").asText();
-                        } else if (root.has("name")) {
-                            name = root.get("name").asText();
-                        } else if (root.has("merchant_name")) {
+                        if (root.has("merchant_name")) {
                             name = root.get("merchant_name").asText();
                         }
                     } catch (Exception e) {

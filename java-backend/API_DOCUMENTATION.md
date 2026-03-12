@@ -24,8 +24,7 @@ Environment variables are loaded from a `.env` file.
 | Column | Type | Description |
 | :--- | :--- | :--- |
 | `merchant_id` | BIGINT (PK) | Unique merchant identifier |
-| `merchant_name` | VARCHAR(255) | Name of the merchant |
-| `config_json` | JSON | Full merchant configuration as JSON tree |
+| `config_json` | JSON | Full merchant configuration (includes merchant name, settings, etc.) |
 
 ### MySQL — `audit_logs` table
 
