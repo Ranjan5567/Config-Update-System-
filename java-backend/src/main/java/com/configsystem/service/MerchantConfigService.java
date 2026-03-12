@@ -1,163 +1,153 @@
 package com.configsystem.service;
 
 import com.configsystem.dto.Api;
+import com.configsystem.entity.mysql.AuditLog;
 import com.configsystem.entity.mysql.Merchant;
-import com.configsystem.entity.postgres.MerchantConfigMetadata;
-import com.configsystem.repository.postgres.MerchantConfigMetadataRepository;
+import com.configsystem.repository.mysql.AuditLogRepository;
 import com.configsystem.repository.mysql.MerchantRepository;
-import com.configsystem.util.JsonPathUtil;
-import com.configsystem.exception.GlobalExceptionHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.*;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class MerchantConfigService {
 
-    private final MerchantRepository               merchantRepo;
-    private final MerchantConfigMetadataRepository metadataRepo;
-    private final JsonPathUtil                     jsonPathUtil;
-    private final ObjectMapper                     objectMapper;
+    private final MerchantRepository merchantRepo;
+    private final AuditLogRepository auditLogRepo;
+    private final ObjectMapper objectMapper;
+    private final JdbcTemplate jdbcTemplate;
 
-    // ── Seed Metadata ──────────────────────────────────────────────────────────
-
-    @Transactional("postgresTransactionManager")
-    public Api.SeedResult seedAll() {
-        List<Merchant> merchants = merchantRepo.findAll();
-        log.info("Seed-all: scanning {} merchants", merchants.size());
-
-        Map<String, String> pathToType = new LinkedHashMap<>();
-        for (Merchant m : merchants) {
-            String json = m.getConfigJson();
-            if (json == null || json.isBlank()) continue;
+    // API 1: Get Current Attribute Value
+    public Api.AttributeValueResponse getCurrentAttributeValue(Long merchantId, String attribute) {
+        return merchantRepo.findById(merchantId).map(merchant -> {
             try {
-                jsonPathUtil.extractLeafNodes(json)
-                        .forEach(leaf -> pathToType.putIfAbsent(leaf.path(), leaf.type()));
-            } catch (Exception ex) {
-                log.error("Merchant {} parse failed: {}", m.getMerchantId(), ex.getMessage());
-            }
-        }
-
-        metadataRepo.deleteAllInBatch();
-        List<MerchantConfigMetadata> rows = pathToType.entrySet().stream()
-                .map(e -> MerchantConfigMetadata.builder()
-                        .jsonPath(e.getKey()).dataType(e.getValue()).build())
-                .toList();
-        metadataRepo.saveAll(rows);
-
-        List<String> paths = new ArrayList<>(pathToType.keySet());
-        log.info("Seed-all complete: {} paths from {} merchants", paths.size(), merchants.size());
-        return new Api.SeedResult(paths.size(), paths,
-                "OK — extracted from " + merchants.size() + " merchants");
-    }
-
-    // ── Fetch ──────────────────────────────────────────────────────────────
-    @Transactional("mysqlTransactionManager")
-    public Api.FetchResult fetch(Api.FetchRequest req) {
-        log.info("Fetching config for merchant: {} with {} paths", req.merchantId(), req.paths().size());
-        
-        try {
-            // 1. Fetch Merchant
-            Merchant merchant = merchantRepo.findById(req.merchantId())
-                    .orElseThrow(() -> new GlobalExceptionHandler.MerchantNotFoundException(req.merchantId()));
-
-            String configJson = merchant.getConfigJson();
-            JsonNode root;
-            if (configJson == null || configJson.isBlank()) {
-                root = objectMapper.createObjectNode();
-            } else {
-                root = objectMapper.readTree(configJson);
-            }
-
-            Map<String, Object> values = new LinkedHashMap<>();
-
-            // 2. Fetch each path
-            for (String path : req.paths()) {
-                String pointerStr = "/" + path.replace("[", "/").replace("]", "").replace(".", "/").replaceAll("/+", "/");
+                JsonNode root = objectMapper.readTree(merchant.getConfigJson());
+                String pointerStr = "/" + attribute.replace(".", "/");
                 JsonNode valNode = root.at(pointerStr);
-                
+
                 if (valNode.isMissingNode() || valNode.isNull()) {
-                    values.put(path, null);
-                } else if (valNode.isBoolean()) {
-                    values.put(path, valNode.asBoolean());
-                } else if (valNode.isNumber()) {
-                    values.put(path, valNode.numberValue());
-                } else if (valNode.isTextual()) {
-                    values.put(path, valNode.asText());
+                    return Api.AttributeValueResponse.ok(attribute, null);
+                }
+                return Api.AttributeValueResponse.ok(attribute, getValueFromNode(valNode));
+            } catch (Exception e) {
+                log.error("Error parsing JSON for merchant {}", merchantId, e);
+                return Api.AttributeValueResponse.error("Error parsing configuration");
+            }
+        }).orElse(Api.AttributeValueResponse.error("Merchant not found"));
+    }
+
+    // API 2: Update DB with new value
+    @Transactional
+    public Api.GenericResponse updateValue(Api.UpdateValueRequest req) {
+        return merchantRepo.findById(req.merchantId()).map(merchant -> {
+            try {
+                JsonNode root = objectMapper.readTree(merchant.getConfigJson());
+                
+                ObjectNode objectNode;
+                if (root instanceof ObjectNode) {
+                    objectNode = (ObjectNode) root;
                 } else {
-                    values.put(path, objectMapper.treeToValue(valNode, Object.class));
+                    objectNode = objectMapper.createObjectNode();
                 }
-            }
 
-            return Api.FetchResult.success("Configuration fetched successfully.", values);
-        } catch (GlobalExceptionHandler.MerchantNotFoundException e) {
-             log.warn("Fetch failed: {}", e.getMessage());
-             return Api.FetchResult.failure(e.getMessage());
-        } catch (Exception e) {
-            log.error("Fetch failed", e);
-            return Api.FetchResult.failure("Fetch failed: " + e.getMessage());
-        }
+                updateJsonNode(objectNode, req.attributeChanged(), req.valueTo());
+                merchant.setConfigJson(objectMapper.writeValueAsString(objectNode));
+                merchantRepo.save(merchant);
+
+                return Api.GenericResponse.ok("Successfully updated " + req.attributeChanged());
+            } catch (Exception e) {
+                log.error("Error updating merchant {}", req.merchantId(), e);
+                return Api.GenericResponse.error("Update failed: " + e.getMessage());
+            }
+        }).orElse(Api.GenericResponse.error("Merchant not found"));
     }
 
-    // ── Update ─────────────────────────────────────────────────────────────
-    @Transactional("mysqlTransactionManager")
-    public Api.UpdateResult update(Api.UpdateRequest req) {
-        log.info("Updating config for merchant: {} with {} updates", req.merchantId(), req.updates().size());
-        
+    // API 3: Retrieve All Merchants Details
+    public List<Api.MerchantDetail> getAllMerchants() {
+        return merchantRepo.findAll().stream()
+                .map(m -> {
+                    String name = "Unknown";
+                    try {
+                        JsonNode root = objectMapper.readTree(m.getConfigJson());
+                        // Try typical keys for merchant name
+                        if (root.has("business_name")) {
+                            name = root.get("business_name").asText();
+                        } else if (root.has("name")) {
+                            name = root.get("name").asText();
+                        } else if (root.has("merchant_name")) {
+                            name = root.get("merchant_name").asText();
+                        }
+                    } catch (Exception e) {
+                        log.warn("Could not parse JSON for merchant {}", m.getMerchantId());
+                    }
+                    return new Api.MerchantDetail(m.getMerchantId(), name);
+                })
+                .collect(Collectors.toList());
+    }
+
+    // API 4: Store Audit Logs in MySQL
+    public Api.GenericResponse storeAuditLog(Api.StoreAuditLogRequest req) {
         try {
-            // 1. Fetch Merchant
-            Merchant merchant = merchantRepo.findById(req.merchantId())
-                    .orElseThrow(() -> new GlobalExceptionHandler.MerchantNotFoundException(req.merchantId()));
-
-            String configJson = merchant.getConfigJson();
-            JsonNode root;
-            if (configJson == null || configJson.isBlank()) {
-                root = objectMapper.createObjectNode();
-            } else {
-                root = objectMapper.readTree(configJson);
-            }
-
-            if (!root.isObject()) {
-                throw new RuntimeException("Config JSON is not an object");
-            }
-
-            com.fasterxml.jackson.databind.node.ObjectNode objectNode = (com.fasterxml.jackson.databind.node.ObjectNode) root;
-
-            // 2. Validate that all paths exist in json_metadata table
-            for (String path : req.updates().keySet()) {
-                if (!metadataRepo.existsById(path)) {
-                    return Api.UpdateResult.failure("Invalid update: path '" + path + "' does not exist in metadata.");
-                }
-            }
-
-            // 3. Apply updates
-            for (Map.Entry<String, Object> entry : req.updates().entrySet()) {
-                updateJsonNode(objectNode, entry.getKey(), entry.getValue());
-            }
-
-            merchant.setConfigJson(objectMapper.writeValueAsString(root));
-            merchantRepo.save(merchant);
-
-            return Api.UpdateResult.success("Configuration updated successfully.", req.updates());
-        } catch (GlobalExceptionHandler.MerchantNotFoundException e) {
-             log.warn("Update failed: {}", e.getMessage());
-             return Api.UpdateResult.failure(e.getMessage());
+            AuditLog log = AuditLog.builder()
+                    .createdBy(req.createdBy())
+                    .createdAt(LocalDateTime.now())
+                    .merchantId(req.merchantId())
+                    .attributeChanged(req.attributeChanged())
+                    .valueFrom(req.valueFrom())
+                    .valueTo(req.valueTo())
+                    .build();
+            auditLogRepo.save(log);
+            return Api.GenericResponse.ok("Audit log stored successfully for merchant " + req.merchantId());
         } catch (Exception e) {
-            log.error("Update failed", e);
-            return Api.UpdateResult.failure("Update failed: " + e.getMessage());
+            log.error("Error storing audit log", e);
+            return Api.GenericResponse.error("Failed to store audit log");
         }
     }
 
-    private void updateJsonNode(com.fasterxml.jackson.databind.node.ObjectNode root, String path, Object value) {
+    // API 5: Retrieve Audit Logs
+    public List<Map<String, Object>> retrieveAuditLogs(String query) {
+        String upperQuery = query.trim().toUpperCase();
+        
+        // Basic validation: must be SELECT, no write operations
+        if (!upperQuery.startsWith("SELECT")) {
+            throw new IllegalArgumentException("Only SELECT queries are allowed");
+        }
+        if (upperQuery.contains("DELETE") || upperQuery.contains("UPDATE") || 
+            upperQuery.contains("INSERT") || upperQuery.contains("DROP") || 
+            upperQuery.contains("ALTER") || upperQuery.contains("TRUNCATE")) {
+            throw new IllegalArgumentException("Unauthorized SQL keywords detected");
+        }
+        
+        // Further validation: only audit_logs table (optional but safer)
+        if (!upperQuery.contains("AUDIT_LOGS")) {
+             throw new IllegalArgumentException("Queries must target the audit_logs table");
+        }
+
+        return jdbcTemplate.queryForList(query);
+    }
+
+    private Object getValueFromNode(JsonNode node) {
+        if (node.isBoolean()) return node.asBoolean();
+        if (node.isNumber()) return node.numberValue();
+        if (node.isTextual()) return node.asText();
+        return node;
+    }
+
+    private void updateJsonNode(ObjectNode root, String path, Object value) {
         String[] parts = path.split("\\.");
-        com.fasterxml.jackson.databind.node.ObjectNode current = root;
+        ObjectNode current = root;
         
         for (int i = 0; i < parts.length - 1; i++) {
             String part = parts[i];
@@ -165,7 +155,7 @@ public class MerchantConfigService {
             if (next == null || !next.isObject()) {
                 next = current.putObject(part);
             }
-            current = (com.fasterxml.jackson.databind.node.ObjectNode) next;
+            current = (ObjectNode) next;
         }
 
         String lastPart = parts[parts.length - 1];

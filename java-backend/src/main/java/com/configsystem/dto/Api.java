@@ -1,8 +1,9 @@
 package com.configsystem.dto;
 
-
 import jakarta.validation.constraints.NotNull;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * API request/response types.
@@ -11,51 +12,64 @@ public final class Api {
 
     private Api() {}
 
-    // ── Requests ──────────────────────────────────────────────────────────────
-
-    public record UpdateRequest(
+    // --- API 1: Get Current Attribute Value ---
+    public record AttributeValueRequest(
             @NotNull Long merchantId,
-            @NotNull java.util.Map<String, Object> updates
+            @NotNull String attribute
     ) {}
 
-    public record FetchRequest(
-            @NotNull Long merchantId,
-            @NotNull List<String> paths
-    ) {}
-
-    // ── Responses ─────────────────────────────────────────────────────────────
-
-    public record UpdateResult(
-            boolean      success,
-            String       message,
-            java.util.Map<String, Object> updatedAttributes,
-            java.time.LocalDateTime timestamp
+    public record AttributeValueResponse(
+            boolean success,
+            String attribute,
+            Object value,
+            String message
     ) {
-        public static UpdateResult success(String message, java.util.Map<String, Object> updatedAttributes) {
-            return new UpdateResult(true, message, updatedAttributes, java.time.LocalDateTime.now());
+        public static AttributeValueResponse ok(String attribute, Object value) {
+            return new AttributeValueResponse(true, attribute, value, "Success");
         }
-        public static UpdateResult failure(String reason) {
-            return new UpdateResult(false, reason, null, java.time.LocalDateTime.now());
+        public static AttributeValueResponse error(String message) {
+            return new AttributeValueResponse(false, null, null, message);
         }
     }
 
-    public record FetchResult(
-            boolean      success,
-            String       message,
-            java.util.Map<String, Object> values,
-            java.time.LocalDateTime timestamp
+    // --- API 2: Update DB with new value ---
+    public record UpdateValueRequest(
+            @NotNull String createdBy,
+            @NotNull Long merchantId,
+            @NotNull String attributeChanged,
+            String valueFrom,
+            @NotNull Object valueTo
+    ) {}
+
+    public record GenericResponse(
+            boolean success,
+            String message
     ) {
-        public static FetchResult success(String message, java.util.Map<String, Object> values) {
-            return new FetchResult(true, message, values, java.time.LocalDateTime.now());
+        public static GenericResponse ok(String message) {
+            return new GenericResponse(true, message);
         }
-        public static FetchResult failure(String reason) {
-            return new FetchResult(false, reason, null, java.time.LocalDateTime.now());
+        public static GenericResponse error(String message) {
+            return new GenericResponse(false, message);
         }
     }
 
-    public record SeedResult(
-            int          pathCount,
-            List<String> paths,
-            String       status
+    // --- API 3: Retrieve All Merchants Details ---
+    public record MerchantDetail(
+            Long id,
+            String name
+    ) {}
+
+    // --- API 4: Store Audit Logs ---
+    public record StoreAuditLogRequest(
+            @NotNull String createdBy,
+            @NotNull Long merchantId,
+            @NotNull String attributeChanged,
+            String valueFrom,
+            String valueTo
+    ) {}
+
+    // --- API 5: Retrieve Audit Logs ---
+    public record AuditLogQueryRequest(
+            @NotNull String query
     ) {}
 }
