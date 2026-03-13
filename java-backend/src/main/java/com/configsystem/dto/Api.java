@@ -25,7 +25,7 @@ public final class Api {
             String message
     ) {
         public static AttributeValueResponse ok(String attribute, Object value) {
-            return new AttributeValueResponse(true, attribute, value, "Success");
+            return new AttributeValueResponse(true, attribute, value, "Successfully retrieved the value");
         }
         public static AttributeValueResponse error(String message) {
             return new AttributeValueResponse(false, null, null, message);
@@ -34,11 +34,9 @@ public final class Api {
 
     // --- API 2: Update DB with new value ---
     public record UpdateValueRequest(
-            @NotNull String createdBy,
             @NotNull Long merchantId,
-            @NotNull String attributeChanged,
-            String valueFrom,
-            @NotNull Object valueTo
+            @NotNull String attribute,
+            @NotNull Object value
     ) {}
 
     public record GenericResponse(

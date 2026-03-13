@@ -62,11 +62,11 @@ public class MerchantConfigService {
                     objectNode = objectMapper.createObjectNode();
                 }
 
-                updateJsonNode(objectNode, req.attributeChanged(), req.valueTo());
+                updateJsonNode(objectNode, req.attribute(), req.value());
                 merchant.setConfigJson(objectMapper.writeValueAsString(objectNode));
                 merchantRepo.save(merchant);
 
-                return Api.GenericResponse.ok("Successfully updated " + req.attributeChanged());
+                return Api.GenericResponse.ok("Successfully updated " + req.attribute());
             } catch (Exception e) {
                 log.error("Error updating merchant {}", req.merchantId(), e);
                 return Api.GenericResponse.error("Update failed: " + e.getMessage());

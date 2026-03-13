@@ -26,11 +26,9 @@ def test_orchestrated_update_and_audit():
     print(f"\n--- 2. Triggering Update for {attribute} ---")
     # This payload must match the Java Record: UpdateValueRequest
     update_payload = {
-        "createdBy": user,
         "merchantId": merchant_id,
-        "attributeChanged": attribute,
-        "valueFrom": current_val,
-        "valueTo": new_value
+        "attribute": attribute,
+        "value": new_value
     }
     
     try:

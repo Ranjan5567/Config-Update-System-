@@ -64,7 +64,7 @@ POST /api/config/attribute-value
   "success": true,
   "attribute": "payment_config.interest_rate",
   "value": 12.5,
-  "message": "Success"
+  "message": "Successfully retrieved the value"
 }
 ```
 
@@ -81,11 +81,9 @@ POST /api/config/update-value
 #### Request Body
 ```json
 {
-  "createdBy": "rm_01",
   "merchantId": 1001,
-  "attributeChanged": "payment_config.interest_rate",
-  "valueFrom": "12.5",
-  "valueTo": 14.5
+  "attribute": "payment_config.interest_rate",
+  "value": 14.5
 }
 ```
 
@@ -93,7 +91,7 @@ POST /api/config/update-value
 ```json
 {
   "success": true,
-  "message": "Successfully updated payment_config.interest_rate and stored audit log."
+  "message": "Successfully updated payment_config.interest_rate"
 }
 ```
 
