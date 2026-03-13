@@ -66,7 +66,7 @@ public class MerchantConfigService {
                 merchant.setConfigJson(objectMapper.writeValueAsString(objectNode));
                 merchantRepo.save(merchant);
 
-                return Api.GenericResponse.ok("Successfully updated " + req.attribute());
+                return Api.GenericResponse.ok("Successfully updated " + req.attribute() + " for merchant " + req.merchantId());
             } catch (Exception e) {
                 log.error("Error updating merchant {}", req.merchantId(), e);
                 return Api.GenericResponse.error("Update failed: " + e.getMessage());

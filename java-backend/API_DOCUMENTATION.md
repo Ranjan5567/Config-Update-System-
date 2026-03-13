@@ -8,7 +8,9 @@
 ## Architecture Overview
 
 The system uses **MySQL** to store merchant details and audit logs.
-Environment variables are loaded from a `.env` file.
+- **Config Updates**: Clients update configuration via the `/config/update-value` endpoint.
+- **Audit Logging**: The system **does not** automatically log audits on update. The orchestrator/program must call `/audit/store` after a successful update.
+- **SQL Flexibility**: The `/audit/retrieve` endpoint allows raw SELECT queries on the audit table for advanced reporting.
 
 | Database | Table | Purpose |
 | :--- | :--- | :--- |
@@ -17,48 +19,21 @@ Environment variables are loaded from a `.env` file.
 
 ---
 
-## Database Schema
-
-### MySQL — `merchants` table
-
-| Column | Type | Description |
-| :--- | :--- | :--- |
-| `merchant_id` | BIGINT (PK) | Unique merchant identifier |
-| `config_json` | JSON | Full merchant configuration (includes merchant name, settings, etc.) |
-
-### MySQL — `audit_logs` table
-
-| Column | Type | Description |
-| :--- | :--- | :--- |
-| `id` | BIGINT (PK, AI) | Auto-increment identifier |
-| `created_by` | VARCHAR(255) | Who made the change |
-| `created_at` | DATETIME | When the change was made |
-| `merchant_id` | BIGINT | To which merchant the change was made |
-| `attribute_changed` | VARCHAR(255) | Which attribute changed (e.g. "display_config.theme") |
-| `value_from` | TEXT | Old value |
-| `value_to` | TEXT | New value |
-
----
-
 ## API Endpoints
 
 ### 1. Get Current Attribute Value
+`POST /config/attribute-value`
 
-Retrieves a specific value from a merchant's configuration JSON.
+Retrieves a specific value from a merchant's configuration JSON using dot notation (e.g., `ui.theme`).
 
-```
-POST /api/config/attribute-value
-```
+#### Scenarios
+| Scenario | Request | Response Body Structure |
+| :--- | :--- | :--- |
+| **Success** | `{"merchantId": 1001, "attribute": "active"}` | `{"success": true, "attribute": "active", "value": "true", ...}` |
+| **Value is Null** | `{"merchantId": 1001, "attribute": "theme"}` | `{"success": true, "attribute": "theme", "value": null, ...}` |
+| **Not Found** | `{"merchantId": 999, "attribute": "active"}` | `{"success": false, "message": "Merchant not found"}` |
 
-#### Request Body
-```json
-{
-  "merchantId": 1001,
-  "attribute": "payment_config.interest_rate"
-}
-```
-
-#### Response (Success)
+#### Example Success Response
 ```json
 {
   "success": true,
@@ -70,15 +45,19 @@ POST /api/config/attribute-value
 
 ---
 
-### 2. Update DB with new value
+### 2. Update Configuration Value
+`POST /config/update-value`
 
-Updates a specific attribute in a merchant's configuration.
+Updates a specific attribute in the merchant's configuration. Supports nesting and will create missing objects in the JSON path.
 
-```
-POST /api/config/update-value
-```
+#### Scenarios
+| Scenario | Request | Response Body Structure |
+| :--- | :--- | :--- |
+| **Success** | `{"merchantId": 1001, "attribute": "active", "value": "false"}` | `{"success": true, "message": "Successfully updated active for merchant 1001"}` |
+| **Nested** | `{"merchantId": 1001, "attribute": "ui.theme", "value": "dark"}` | `{"success": true, "message": "Successfully updated ui.theme for merchant 1001"}` |
+| **Not Found** | `{"merchantId": 999, ...}` | `{"success": false, "message": "Merchant not found"}` |
 
-#### Request Body
+#### Example Request Body
 ```json
 {
   "merchantId": 1001,
@@ -87,34 +66,38 @@ POST /api/config/update-value
 }
 ```
 
-#### Response
+#### Example Response
 ```json
 {
   "success": true,
-  "message": "Successfully updated payment_config.interest_rate"
+  "message": "Successfully updated payment_config.interest_rate for merchant 1001"
 }
 ```
 
 ---
 
-### 3. Retrieve All Merchants Details
+### 3. Retrieve All Merchant Details
+`GET /merchants/details`
 
-Returns a list of all merchants registered in the system.
+Returns basic information for all active merchants.
 
-```
-GET /api/merchants/details
-```
+#### Scenarios
+| Scenario | Request | Response Body Structure |
+| :--- | :--- | :--- |
+| **Success** | `GET /merchants/details` | `[{"merchantId": 1001, "merchantName": "Amazon"}, ...]` |
+| **Missing Name**| `GET /merchants/details` | `[{"merchantId": 1003, "merchantName": "Unknown"}]` |
+| **Empty DB** | `GET /merchants/details` | `[]` |
 
-#### Response
+#### Example Response
 ```json
 [
   {
-    "id": 1,
-    "name": "Merchant One"
+    "merchantId": 1,
+    "merchantName": "Merchant One"
   },
   {
-    "id": 2,
-    "name": "Merchant Two"
+    "merchantId": 2,
+    "merchantName": "Merchant Two"
   }
 ]
 ```
@@ -122,17 +105,20 @@ GET /api/merchants/details
 ---
 
 ### 4. Store Audit Logs
+`POST /audit/store`
 
-Manually records an audit entry.
+Manual orchestration point to record changes. **Must be triggered by the program after API 2 succeeds.**
 
-```
-POST /api/audit/store
-```
+#### Scenarios
+| Scenario | Request | Response Body Structure |
+| :--- | :--- | :--- |
+| **Success** | `{"createdBy": "admin", "merchantId": 1001, ...}` | `{"success": true, "message": "Audit log stored successfully..."}` |
+| **DB Error** | `{"merchantId": 1001, ...}` | `{"success": false, "message": "Failed to store audit log"}` |
 
-#### Request Body
+#### Example Request Body
 ```json
 {
-  "createdBy": "rm_01",
+  "createdBy": "admin_user",
   "merchantId": 1001,
   "attributeChanged": "display_config.theme",
   "valueFrom": "#000080",
@@ -140,52 +126,32 @@ POST /api/audit/store
 }
 ```
 
-#### Response
-```json
-{
-  "success": true,
-  "message": "Success"
-}
-```
-
 ---
 
 ### 5. Retrieve Audit Logs
+`POST /audit/retrieve`
 
-Executes a SELECT query on the audit logs table.
+Advanced search using raw SQL queries. **Only SELECT queries on the `audit_logs` table are permitted.**
 
-```
-POST /api/audit/retrieve
-```
+#### Scenarios
+| Scenario | Query Example | Response Body Structure |
+| :--- | :--- | :--- |
+| **Success** | `SELECT * FROM audit_logs` | `[{"id": 1, "created_at": "...", ...}]` |
+| **Unauthorized**| `DELETE FROM audit_logs` | `{"success": false, "message": "Only SELECT queries are allowed"}` |
+| **Wrong Table** | `SELECT * FROM merchants` | `{"success": false, "message": "Queries must target the audit_logs table"}` |
 
-#### Request Body
+#### Example Request Body
 ```json
 {
-  "query": "SELECT * FROM audit_logs WHERE merchant_id = 1"
+  "query": "SELECT * FROM audit_logs WHERE merchant_id = 1001 ORDER BY created_at DESC"
 }
-```
-
-#### Response
-```json
-[
-  {
-    "id": 1,
-    "created_by": "admin_user",
-    "created_at": "2026-03-12T18:30:00",
-    "merchant_id": 1,
-    "attribute_changed": "display_config.theme",
-    "value_from": "#000080",
-    "value_to": "#000000"
-  }
-]
 ```
 
 ---
 
 ## Configuration
 
-The application requires a `.env` file in the root directory:
-
+Required `.env` file structure:
 ```env
 DB_URL=jdbc:mysql://localhost:3306/merchant_db
 DB_USERNAME=root

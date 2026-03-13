@@ -53,8 +53,8 @@ public final class Api {
 
     // --- API 3: Retrieve All Merchants Details ---
     public record MerchantDetail(
-            Long id,
-            String name
+            Long merchantId,
+            String merchantName
     ) {}
 
     // --- API 4: Store Audit Logs ---
